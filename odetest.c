@@ -151,11 +151,11 @@ main (int argc, char **argv)
 	run ("vacuum.dat");
 	finish ();
 
-	if (0) {
 		setup (tennis_air);
 		run ("air.dat");
 		finish ();
 
+	if (0) {
 		setup (tennis_spin);
 		run ("spin.dat");
 		finish ();

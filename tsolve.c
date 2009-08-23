@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <math.h>
 #include <memory.h>
+#include <unistd.h>
+#include <sys/time.h>
 #include <gsl/gsl_errno.h>
 #include <gsl/gsl_vector.h>
 #include <gsl/gsl_matrix.h>
@@ -10,6 +12,8 @@
 #define RTOD(x) ((x) / 2.0 / M_PI * 360)
 #define DTOR(x) ((x) / 360.0 * 2 * M_PI)
 
+int vflag;
+
 FILE *outf;
 
 struct experiment_params {
@@ -18,6 +22,8 @@ struct experiment_params {
 	double observed_secs;
 
 	double observed_dist;
+
+	double alpha;
 
 	double sim_dist;
 	double sim_secs;
@@ -37,13 +43,27 @@ struct experiment_params {
 	gsl_multimin_fminimizer *minimizer;
 };
 
+#define GRAVITY -9.81
+
 int
-sim_func (double t, const double state[], double dstate[], void *params)
+sim_func (double t, const double state[], double dstate[], void *params_raw)
 {
-	dstate[0] = state[2];
-	dstate[1] = state[3];
-	dstate[2] = 0;
-	dstate[3] = -9.81;
+	struct experiment_params *params = params_raw;
+	double v;
+
+	if (0) {
+		dstate[0] = state[2];
+		dstate[1] = state[3];
+		dstate[2] = 0;
+		dstate[3] = -9.81;
+	} else {
+		v = hypot (state[2], state[3]);
+		dstate[0] = state[2];
+		dstate[1] = state[3];
+		dstate[2] = - params->alpha * 0.508 * state[2] * v;
+		dstate[3] = - params->alpha * 0.508 * state[3] * v + GRAVITY;
+	}
+
 	return GSL_SUCCESS;
 }
 
@@ -61,8 +81,9 @@ do_simulation (const gsl_vector *proposed_vars, void *params_raw)
 	ball_diameter = 0.063;
 	ball_mass = 0.05;
 	rho = 1.29; 
+
+	params->alpha = M_PI*(ball_diameter*ball_diameter)/(8*ball_mass)*rho;
 #if 0	
-	alpha = M_PI*(ball_diameter*ball_diameter)/(8*ball_mass)*rho;
 	etha = 1; /* spin direction */
 	w = 20; /* spin speed */
 #endif
@@ -106,12 +127,13 @@ do_simulation (const gsl_vector *proposed_vars, void *params_raw)
 			frame_secs /= 10;
 		}
 
-		if (fine_mode == 0)
+		if (vflag && fine_mode == 0)
 			fprintf (outf, "%.14g %.14g\n", state[0], state[1]);
 	}
 
-	fprintf (outf, "%.14g %.14g\n",
-		 prev_state[0], prev_state[1]);
+	if (vflag) {
+		fprintf (outf, "%.14g %.14g\n", prev_state[0], prev_state[1]);
+	}
 
 	params->sim_dist = prev_state[0];
 	params->sim_secs = prev_t;
@@ -128,28 +150,34 @@ compute_error_func (const gsl_vector *proposed_vars, void *params_raw)
 	proposed_speed = gsl_vector_get (proposed_vars, 0);
 	proposed_angle = gsl_vector_get (proposed_vars, 1);
 
-	sprintf (filename, "sim%04.1f-%04.1f.dat",
-		 proposed_speed, RTOD (proposed_angle));
-	if ((outf = fopen (filename, "w")) == NULL) {
-		fprintf (stderr, "can't create %s\n", filename);
-		exit (1);
+	if (vflag) {
+		sprintf (filename, "sim%04.1f-%04.1f.dat",
+			 proposed_speed, RTOD (proposed_angle));
+		if ((outf = fopen (filename, "w")) == NULL) {
+			fprintf (stderr, "can't create %s\n", filename);
+			exit (1);
+		}
+		printf ("%s\n", filename);
 	}
-	printf ("%s\n", filename);
 
 	do_simulation (proposed_vars, params);
 
-	fclose (outf);
+	if (vflag) {
+		fclose (outf);
+	}
 
 	dist_err = params->sim_dist - params->observed_dist;
 	secs_err = params->sim_secs - params->observed_secs;
 
 	err = dist_err * dist_err + 100 * secs_err * secs_err;
 
-	printf ("%10.6f %10.6f %10.6f %10.6f %10.6f %10.6f\n",
-		params->sim_secs,
-		gsl_vector_get (proposed_vars, 0),
-		RTOD (gsl_vector_get (proposed_vars, 1)),
-		dist_err, secs_err, err);
+	if (vflag) {
+		printf ("%10.6f %10.6f %10.6f %10.6f %10.6f %10.6f\n",
+			params->sim_secs,
+			gsl_vector_get (proposed_vars, 0),
+			RTOD (gsl_vector_get (proposed_vars, 1)),
+			dist_err, secs_err, err);
+	}
 
 	return (err);
 }
@@ -185,7 +213,8 @@ solve_by_simulation (struct experiment_params *params)
      
 	       err = gsl_multimin_fminimizer_minimum (params->minimizer);
 	       if (fabs (err) < .001) {
-		       printf ("ok %d\n", iter);
+		       if (vflag)
+			       printf ("ok %d\n", iter);
 		       break;
 	       }
        }
@@ -220,6 +249,21 @@ graph_error_func (struct experiment_params *params)
 	fclose (f);
 }
 			
+double
+get_secs (void)
+{
+	struct timeval tv;
+	gettimeofday (&tv, NULL);
+	return (tv.tv_sec + tv.tv_usec / 1e6);
+}
+
+void
+usage (void)
+{
+	fprintf (stderr, "usage: tsolve\n");
+	exit (1);
+}
+
 
 #define METERS_PER_SEC_TO_MPH 2.2369363
 int
@@ -229,15 +273,28 @@ main (int argc, char **argv)
 	double dx, dy;
 	double speed, angle;
 	gsl_vector *solution;
+	int c;
+	double compute_start, delta;
+
+	while ((c = getopt (argc, argv, "v")) != EOF) {
+		switch (c) {
+		case 'v':
+			vflag = 1;
+			break;
+		default:
+			usage ();
+		}
+	}
+
 
 	memset (&params, 0, sizeof params);
 	params.observed_hit[0] = 0;
 	params.observed_hit[1] = 0;
 	params.observed_hit[2] = 1;
-	params.observed_bounce[0] = 35;
+	params.observed_bounce[0] = 25;
 	params.observed_bounce[1] = 0;
 	params.observed_bounce[2] = 0;
-	params.observed_secs = 1.454;
+	params.observed_secs = 1.359;
 
 	dx = params.observed_bounce[0] - params.observed_hit[0];
 	dy = params.observed_bounce[1] - params.observed_hit[1];
@@ -247,6 +304,7 @@ main (int argc, char **argv)
 
 	params.odesys.function = sim_func;
 	params.odesys.dimension = params.simulator_dimen;
+	params.odesys.params = &params;
 
 	params.stepper = gsl_odeiv_step_alloc (gsl_odeiv_step_rk8pd,
 					       params.simulator_dimen);
@@ -267,16 +325,19 @@ main (int argc, char **argv)
 		graph_error_func (&params);
 	}
 
+	compute_start = get_secs ();
 	solve_by_simulation (&params);
+	delta = get_secs () - compute_start;
 
 	solution = gsl_multimin_fminimizer_x (params.minimizer);
 
 	speed = gsl_vector_get (solution, 0);
 	angle = gsl_vector_get (solution, 1);
 
-	printf ("speed = %8.3f angle = %8.3f\n",
+	printf ("speed = %8.3f angle = %8.3f; compute time %.3fms\n",
 		speed * METERS_PER_SEC_TO_MPH,
-		RTOD (angle));
+		RTOD (angle),
+		delta * 1000);
 
 	return (0);
 }
