@@ -1,0 +1,4 @@
+set style data lines
+set hidden3d
+set zrange [0:100]
+splot "err.dat", .5

@@ -1,0 +1,21 @@
+http://books.google.com/books?id=mkDgFimniVcC&lpg=PA28&ots=dHFJQ0xeK3&dq=tennis%20ball%20differential%20equation&pg=PA27#v=onepage&q=tennis%20ball%20differential%20equation&f=false
+
+13.6 <= v <= 28 m/sec
+800 <= n <= 3250 rpm
+
+omega = direction and speed of rotation
+vel = velocity vector; 
+v = vmag(vel);
+
+w = d/2 * abs (oemga cross vel / v)
+C_D = 0.508 + pow (1 / (22.053 + 4.196 * pow (v/w, 5.0/2.0)), 2.0/5.0);
+C_M = 1 / (2.022 + 0.981 * v / w);
+
+will neglect deceleration of ball revolution, so w is constant
+
+postion r(t) (a vector) 
+
+m d^2 r(t)/dt^2 = -mg - D_L vel/v + M_L omega/vmag(omega) cross vel/v
+
+initial conditions r(0) = r_0 and dr/dt(0) = vel_0
+
